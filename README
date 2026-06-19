@@ -1,0 +1,43 @@
+Manuscript Title: Outsized roles of elders within wildlife populations; age-related 
+increases in salmon consumption by grizzlies and its ecological implications
+
+
+Script Descriptions:
+
+01_SalmonBiomassDensity.R:  calculates annual salmon biomass density per merged 
+watershed (2008-2019); reproduces methods describe in section '2.31 – Salmon Biomass Density'
+in the manuscript
+
+02_SalmonDiversity_by_watershed.R: calculates annual Shannon diversity of salmon 
+species per merged watershed (2008–2019); reproduces methods described in 
+section '2.32 Salmon diversity' in the manuscript
+
+03_EVI_by_Watershed.R: extracts mean spring–summer EVI from MODIS imagery per 
+merged watershed (2008–2018); reproduces methods described in section 
+'2.33 – Terrestrial plant productivity (vegetation) ' in the manuscript
+
+04_attribute_covariotes.R: spatially joins bear locations to watersheds and 
+attributes all covariates with a one-year lag; reproduces methods described in 
+section '2.3 Covariate attribution' in the manuscript
+
+05_glmm_analysis.R: fits and compares beta regression GLMMs; reproduces analyses 
+described in section '2.4 Data Analysis' and results in section '3' in 
+the manuscript
+
+06_salmon_by_age.R: estimates absolute salmon consumption (kg) as bears age
+using m1 model predictions and Kingsley (1983) growth curves; reproduces 
+analyses described in section '2.41 – Estimating increase in salmon biomass 
+consumption with age' in the manuscript
+
+Data:
+the following processed file is provided to complete all script 05 and 06:
+
+all_cov_scaled_no_locations.csv: Final modelling dataset (550 individual-year 
+combinations) with scaled covariates. UTM coordinates removed.
+
+
+
+Code/Software
+Analyses were conducted in R. R Core Team (2026). R: A language and environment 
+for statistical computing. R Foundation for Statistical Computing, Vienna,
+Austria. URL https://www.R-project.org/. Version 2026.01.1+403 
