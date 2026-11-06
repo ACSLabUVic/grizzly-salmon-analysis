@@ -1,69 +1,34 @@
 #####################
 #
-# code to calculate salmon biomass per watershed and year, adapted from Heather Bryan
+# # This script calculates salmon biomass and salmon biomass density per watershed
+# and year. It starts from the focal watershed layer (focal_clipped.shp) in
+# data/processed/, which was created from hair-snag locations
 #
 # Data that went into this is the imputed salmon biomass data from Heather Bryan
 # Code written by Monica Short
 #
-# The first section contains Raw input files are not included in this repository to
-# protect sensitive wildlife location data. Outputs from this script are provided 
-# in data/processed/
-
+# 
 #####################
 
-library(readr)
 library(here)
 library(dplyr)
 library(tidyr)
 library(sf)
-library(reshape2)
-library(foreign)
-library(tidyr)
 library(ggplot2)
 
-# =============================================================================
-# this section uses hair snare locations (not shared) to select focal watersheds. 
-# the output (focal_clipped.shp) is provided in data/processed
+#####################
 
-#Select watersheds that have hair snags located within them first
-WSH <- st_read(here("data", "raw","FWA_ASSESSMENT_WATERSHEDS_POLY", "FWA_ASS_WS_polygon.shp")) 
-snags <- st_read("data/raw/sensitivity data/Hair snag shapefiles/HairSites_utm_zone9.shp")     # SENSITIVE DATA, NOT SHARED
-
-#remove snags from Gitga'at and align the crs with the watershed layer
-snags <- snags[which(snags$project != "gt"),]
-snags <- st_transform(snags, crs = st_crs(WSH))
-
-#read in polygons for the merged watersheds
-usable_WSH <- st_read("/Volumes/Seagate HD/Honours/01_For publication/GrizzlyBear_Salmon_BioLetters/02_Data/PROCESSED/LRG_Watersheds_for_all_sites/LRG_Watersheds_all_sites_FINAL.shp") 
-
-#ensure it is in the same crs as other sf
-usable_WSH <- st_transform(usable_WSH, crs = st_crs(WSH))
-
-#clip the watersheds to those that overlap the full study area (i.e., the merged watersheds) 
-#the reason I am clipping it to the merged file rather than to just those that include hair snags is because
-#we need to have the salmon stream data for those surrounding watersheds as well
-wsh_clip <- st_join(WSH, usable_WSH, join = st_intersects) %>%
-  filter(!is.na(WSHDFID))
-wsh_clip_snagsonly <- st_join(WSH, snags, join = st_intersects) %>%
-  filter(!is.na(site_id))
-
-## select only the columns we need
-wsh_clip <- wsh_clip[,c("WTRSHD_FID", "AREA_HA", "F_CODE", "OBJECTID", "AREA_SQM", "FEAT_LEN", "WSHDFID", "usblAREA", "geometry")]
-wsh_clip_snagsonly <- wsh_clip_snagsonly[,c(1, 21:25, 41)]
-
-## remove duplicates
-wsh_clip <- unique(wsh_clip) #these are our focal watersheds :) 
-wsh_clip_snagsonly <- unique(wsh_clip_snagsonly)
-
-## plot focal watersheds and hair snag locations
-plot(wsh_clip$geometry)
-plot(snags$geometry, add = TRUE, pch = 20, cex = 0.5, col = "purple")
-
-st_write(wsh_clip, here("data", "processed", "Focal Watersheds in Study Area", "focal_clipped.shp"), 
-         delete_dsn = TRUE)
-
-# =============================================================================
 #Intersect salmon with shapefiles
+
+#read in the focal watersheds (made in 00_sensitive.R) and the merged (large) watersheds
+#the focal layer must have ONE row per focal watershed: stream lengths are summed over it below,
+wsh_clip <- st_read(here("data", "processed", "Focal Watersheds in Study Area", "focal_clipped.shp")) %>%
+  distinct(WTRSHD_FID, .keep_all = TRUE)
+stopifnot(!anyDuplicated(wsh_clip$WTRSHD_FID))
+
+# merged watersheds:
+usable_WSH <- st_read(here("data", "processed", "LRG_Watersheds_for_all_sites", "LRG_Watersheds_all_sites_FINAL.shp")) %>%
+  st_transform(crs = st_crs(wsh_clip))
 
 #read in salmon data
 salm <- st_read(here("data","processed", "combinedStreamsBMTotal_NoZeros2019", "combinedStreamsBMTotal_NoZeros2019.shp"))
@@ -72,7 +37,7 @@ salm <- st_read(here("data","processed", "combinedStreamsBMTotal_NoZeros2019", "
 salm <- salm[,c(56:70)]
 
 #ensure the crs is the same as our focal watershed layer
-salm <- st_transform(salm, crs = st_crs(WSH))
+salm <- st_transform(salm, crs = st_crs(wsh_clip))
 
 #intersect salmon streams with the focal watersheds
 focal_salm <- st_intersection(salm, wsh_clip)
@@ -196,7 +161,7 @@ bm_merge_spatial$LogBMDensityinMWS <- log(bm_merge_spatial$YearlyBMDensityinMWS 
 
 
 #we also have one biomass density estimate (and log transformed version) for each larger watershed and year
-st_write(bm_merge_spatial, here("data", "processed", "merg_salm_biomass_per_year_w_density.csv"))
+st_write(bm_merge_spatial, here("data", "processed", "merg_salm_biomass_per_year_w_density.csv"), delete_dsn = TRUE)
 
 #------------------------------------------------------------------------------------------------
 #Plotting the larger watersheds
@@ -436,3 +401,4 @@ ggplot()+
   scale_fill_viridis_c(limits = c(0, 9.25), na.value = "white")+
   labs(x = "", y = "", fill = "Log of Salmon \nBiomass Density  \n(kg/km2) in Merged \nWatershed 2019") +
   theme_minimal()
+
