@@ -3,8 +3,9 @@
 # This code is for attributing EVI at watersheds
 # Extracts mean, median, and maximum EVI from MODIS satellite imagery
 # (MOD13Q1, 250m, 16-day composites) for each merged watershed. Mean EVI is used 
-# as a covariate in models.
+# as a covariate in GLMM models.
 #
+# 
 ####################
 
 library(here)
@@ -12,6 +13,8 @@ library(terra)
 library(tidyverse)
 library(sf)
 library(dplyr)
+
+###################
 
 # Load Raw EVI layers folder 
 evi_folder <- here("data", "raw", "RAW_EVI_APRIL22_JULY27")
@@ -65,7 +68,7 @@ r2017 = rast(evi_files_2017)
 r2018 = rast(evi_files_2018)
 
 # Load LRGwatershed shapefile 
-WSHEDS <- vect("/Volumes/Seagate HD/Honours/01_For publication/GrizzlyBear_Salmon_BioLetters/02_Data/RAW/LRG_Watersheds_for_all_sites/LRG_Watersheds_all_sites_FINAL.shp")  
+WSHEDS <- vect(here("data", "processed", "LRG_Watersheds_for_all_sites", "LRG_Watersheds_all_sites_FINAL.shp"))  
 
 # Check CRS - reproject the EVI data to CRS of watersheds:
 r2008 <- project(r2008, crs(WSHEDS))
@@ -245,132 +248,5 @@ st_write(watersheds_evi, here("data", "processed", "EVI", "evi_shps", "EVI_by_ye
 st_write(mean_evi, here("data", "processed", "EVI", "evi_shps", "Mean_EVI_by_year_in_merged_WSHDs.shp"))
 st_write(median_evi, here("data", "processed", "EVI", "evi_shps", "Median_EVI_by_year_in_merged_WSHDs.shp"))
 st_write(max_evi, here("data", "processed", "EVI", "evi_shps", "Max_EVI_by_year_in_merged_WSHDs.shp"))
-# ------------------------------------------------------------------------------
 
 
-## SPATIAL VISUALIZATION 
-library(ggplot2)
-library(gridExtra)
-
-## Read shapefiles back in:
-wshd_evi_shp <- st_read("~/AH Honours/Methods/site_data/Shapefiles/EVI/Large Watersheds/EVI_by_year_in_LRG_Watersheds_scaled.shp")
-mean_evi_shp <- st_read("~/AH Honours/Methods/site_data/Shapefiles/EVI/Large Watersheds/Scaled_Mean_EVI_by_year_in_LRG_Watersheds.shp")
-median_evi_shp <- st_read("~/AH Honours/Methods/site_data/Shapefiles/EVI/Large Watersheds/Scaled_Median_EVI_by_year_in_LRG_Watersheds.shp")
-max_evi_shp <- st_read("~/AH Honours/Methods/site_data/Shapefiles/EVI/Large Watersheds/Scaled_Max_EVI_by_year_in_LRG_Watersheds.csv")
-
-# Find the global range of EVI values across all three variables
-evi_range <- range(c(watersheds_evi$mn_EVI2018, 
-                     watersheds_evi$md_EVI2018, 
-                     watersheds_evi$mx_EVI2018), na.rm = TRUE)
-#0.08638763 0.86984863
-
-
-# Plot the data using ggplot2 with EVI values by watershed
-plot1 <- ggplot(data = watersheds_evi) +
-  geom_sf(aes(fill = mean_EVI2018)) +  # Color by mean EVI in 2018
-  scale_fill_viridis_c(limits = evi_range) +  # Color scale for EVI values
-  labs(title = "Mean EVI by Large Watershed in 2018", fill = "Mean EVI 2018") +
-  theme_minimal() +
-  theme(legend.position = "right")
-plot1
-
-# Plot the data using ggplot2 with EVI values by watershed
-plot2 <- ggplot(data = watersheds_evi) +
-  geom_sf(aes(fill = md_EVI2018)) +  # Color by mean EVI in 2018
-  scale_fill_viridis_c(limits = evi_range) +  # Color scale for EVI values
-  labs(title = "Median EVI by Large Watershed in 2018", fill = "Median EVI 2018") +
-  theme_minimal() +
-  theme(legend.position = "right")
-
-# Plot the data using ggplot2 with EVI values by watershed
-plot3 <- ggplot(data = watersheds_evi) +
-  geom_sf(aes(fill = mx_EVI2018)) +  # Color by mean EVI in 2018
-  scale_fill_viridis_c(limits = evi_range) +  # Color scale for EVI values
-  labs(title = "Max EVI by Large Watershed in 2018", fill = "Max EVI 2018") +
-  theme_minimal() +
-  theme(legend.position = "right")
-
-# Arrange the plots on the same page
-grid.arrange(plot1, plot2, plot3, ncol = 3)
-
-#-------------------------------------------------------------------------------------------
-## SUMMARY STATISTICS 
-## using 2018 as a case study
-
-
-# Summarize statistics for each method (mean, median, max) for each year
-summary_stats <- scaled_EVI %>%
-  select(WTRSHD_FID, starts_with("mean_EVI"), starts_with("median_EVI"), starts_with("max_EVI")) %>%
-  summarise(
-    across(starts_with("mean_EVI"), list(min = ~min(. , na.rm = TRUE),
-                                         max = ~max(. , na.rm = TRUE),
-                                         mean = ~mean(. , na.rm = TRUE),
-                                         sd = ~sd(. , na.rm = TRUE))),
-    across(starts_with("median_EVI"), list(min = ~min(. , na.rm = TRUE),
-                                           max = ~max(. , na.rm = TRUE),
-                                           mean = ~mean(. , na.rm = TRUE),
-                                           sd = ~sd(. , na.rm = TRUE))),
-    across(starts_with("max_EVI"), list(min = ~min(. , na.rm = TRUE),
-                                        max = ~max(. , na.rm = TRUE),
-                                        mean = ~mean(. , na.rm = TRUE),
-                                        sd = ~sd(. , na.rm = TRUE)))
-  )
-
-
-
-## HISTOGRAM: 
-# Create a histogram for each method (mean, median, max) without converting to long format
-plot1 <- ggplot(scaled_EVI) +
-  geom_histogram(aes(x = mean_EVI2018), bins = 30, fill = "blue", alpha = 0.5) +
-  labs(title = "Histogram of mean EVI (2018)", x = "EVI Value", y = "Frequency") +
-  theme_minimal()
-
-plot2 <- ggplot(scaled_EVI) +
-  geom_histogram(aes(x = median_EVI2018), bins = 30, fill = "blue", alpha = 0.5) +
-  labs(title = "Histogram of median EVI (2018)", x = "EVI Value", y = "Frequency") +
-  theme_minimal()
-
-plot3 <- ggplot(scaled_EVI) +
-  geom_histogram(aes(x = max_EVI2018), bins = 30, fill = "blue", alpha = 0.5) +
-  labs(title = "Histogram of Max EVI (2018)", x = "EVI Value", y = "Frequency") +
-  theme_minimal()
-
-# Arrange the plots on the same page
-grid.arrange(plot1, plot2, plot3, ncol = 3)
-
-### ------------------------------------------------------------------------------------------------------
-## READ In FILES 
-scaled_EVI <- read.csv("~/AH Honours/Methods/site_data/EVI/EVI_in_LRG_WSHDs/EVI_by_year_in_LRGWatersheds_scaled.csv")
-scaledlrg_EVI_mean <- read.csv("~/AH Honours/Methods/site_data/EVI/EVI_in_LRG_WSHDs/Scaled_Mean_EVI_by_year_in_LRGWatersheds.csv")
-scaledlrg_EVI_median <- read.csv("~/AH Honours/Methods/site_data/EVI/EVI_in_LRG_WSHDs/Scaled_Median_EVI_by_year_in_LRGWatersheds.csv")
-scaledlrg_EVI_max <- read.csv("~/AH Honours/Methods/site_data/EVI/EVI_in_LRG_WSHDs/Scaled_Max_EVI_by_year_in_LRGWatersheds.csv")
-
-# get sum stats for mean, median, max over 10 year period: 
-## Step 1: Compute a summary value per watershed across years
-overall_EVI <- scaled_EVI %>%
-  rowwise() %>%
-  mutate(
-    mean_EVI_all = mean(c_across(starts_with("mean_EVI")), na.rm = TRUE),
-    median_EVI_all = mean(c_across(starts_with("median_EVI")), na.rm = TRUE),  # or median(...)
-    max_EVI_all = max(c_across(starts_with("max_EVI")), na.rm = TRUE)
-  ) %>%
-  ungroup()
-
-# Step 2: Summarize across all watersheds (i.e., study area)
-summary_stats <- overall_EVI %>%
-  summarise(
-    mean_EVI_min = min(mean_EVI_all, na.rm = TRUE),
-    mean_EVI_max = max(mean_EVI_all, na.rm = TRUE),
-    mean_EVI_mean = mean(mean_EVI_all, na.rm = TRUE),
-    mean_EVI_sd = sd(mean_EVI_all, na.rm = TRUE),
-    
-    median_EVI_min = min(median_EVI_all, na.rm = TRUE),
-    median_EVI_max = max(median_EVI_all, na.rm = TRUE),
-    median_EVI_mean = mean(median_EVI_all, na.rm = TRUE),
-    median_EVI_sd = sd(median_EVI_all, na.rm = TRUE),
-    
-    max_EVI_min = min(max_EVI_all, na.rm = TRUE),
-    max_EVI_max = max(max_EVI_all, na.rm = TRUE),
-    max_EVI_mean = mean(max_EVI_all, na.rm = TRUE),
-    max_EVI_sd = sd(max_EVI_all, na.rm = TRUE)
-  )
