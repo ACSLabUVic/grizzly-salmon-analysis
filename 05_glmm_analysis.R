@@ -1,27 +1,29 @@
 #-------------------------------------------------------------------------------
-# Grizzly bear salmon consumption
-# Does salmon consumption increase with bear age
+# Grizzly bear salmon consumption - Biology Letters
+# 
+# This script fits the beta GLMMs, compares the candidate models (AICc and likelihood-ratio
+# tests), checks model fit with DHARMa, and reports the results of the top model (m1).
+# 
+# 
 #-------------------------------------------------------------------------------
 
+library(here)
 library(tidyr)
-library(lattice)
 library(glmmTMB)
 library(bbmle) 
 library(MuMIn)
-library(ggeffects)
-library(sjPlot)
-library(fitdistrplus)
 library(dplyr)
-library(corrplot)
-library(coefplot)
 library(DHARMa)
+library(ggeffects)
+library(insight)
+library(performance)
 
 # ----------------------
 
-##Salmon.med = response variable
-##Fixed effects = sex , biomass density, log biomass, biomass, diversity, mean EVI, relative age
-## all have been centered and scaled with a mean of 0
-##Random effects = individual, year, watershed
+##  Salmon.med       = response variable
+##  Fixed effects    = sex , biomass density, log biomass, biomass, diversity, mean EVI, relative age
+##                          all have been centered and scaled with a mean of 0
+##  Random effects   = individual, year, watershed
 
 #covariote names: 
 # sex
@@ -30,13 +32,21 @@ library(DHARMa)
 # diversity_z
 # relative_age_z
 
-## six models created from hypotheses:
+out_dir <- here("output")
+dir.create(out_dir, showWarnings = FALSE)
 
 # -----------------------
 # read in df for modelling
-df <- read.csv(here("data", "processed", "all_cov_scaled_no_locations.csv"))
+df <- read.csv(here("data", "processed", "covariotes_no_locations_2026-11-04.csv"))
 
 df$sex <- as.factor(df$sex)
+
+## data checks: 
+nrow(df)
+n_distinct(df$individual)
+n_distinct(df$WSHDFID)
+range(df$Salmon.med)
+summary(df$hill_diversity_z)
 
 # ----------------------
 ### MODEL 1: NULL MODEL  - random + sex + biomass
@@ -50,7 +60,11 @@ m1 <- glmmTMB(Salmon.med ~ sex + LogBM_z + relative_age_z +
 
 # H1b Salmon community complexity: 
 # diversity extends seasonal access, driving consumption more than biomass alone (Service et al. 2019)
-m2 <- glmmTMB(Salmon.med ~ LogBM_z + diversity_z + sex + relative_age_z +
+m2_shannon <- glmmTMB(Salmon.med ~ LogBM_z + diversity_z + sex + relative_age_z +
+               (1 | WSHDFID) + (1 | year) + (1 | individual),
+              data = df, family = beta_family(link = "logit"))
+
+m2_hill <- glmmTMB(Salmon.med ~ LogBM_z + hill_diversity_z + sex + relative_age_z +
                 (1 | WSHDFID) + (1 | year) + (1 | individual),
               data = df, family = beta_family(link = "logit"))
 
@@ -72,290 +86,152 @@ m5 <- glmmTMB(Salmon.med ~ sex + LogBM_z + EVI_Mean_z + relative_age_z +
                 (1 | WSHDFID ) + (1 | year) + (1 | individual), 
               data = df, family = beta_family(link = "logit"))
 
+# Shannon versus Hill (same number of parameters, so compare by AIC)
+bbmle::AICtab(m2_shannon, m2_hill, weights = TRUE, delta = TRUE)
+confint(m2_hill, parm = "beta_")
+
+summary(m2_hill)
+summary(m2_shannon)
+
+MuMIn::AICc(m2_shannon, m2_hill)                 # exact AICc for both models
+confint(m2_shannon, parm = "beta_")["diversity_z", ]
+confint(m2_hill, parm = "beta_")["hill_diversity_z", ]
+
+models <- list(null = null, m1 = m1, m2_hill = m2_hill, m3 = m3, m4 = m4, m5 = m5)
+
 # ----------------------
-## AIC Table:
-bbmle::AICtab(
-  null, m1, m2, m3, m4, m5,
+fit_status <- function(m) {
+  data.frame(
+    convergence = m$fit$convergence,   # 0 = converged
+    pdHess      = m$sdr$pdHess,        # TRUE = positive-definite Hessian
+    singular    = check_singularity(m),
+    nobs        = nobs(m)              # must be the same for every model
+  )
+}
+status <- do.call(rbind, lapply(models, fit_status))
+status
+
+# Random-effect variances
+lapply(models, VarCorr)
+
+## Model Selection: AICc Table:
+bbmle::AICctab(
+  null, m1, m2_hill, m3, m4, m5,
   weights = TRUE,
   delta   = TRUE,
   sort    = TRUE
 )
 
-r.squaredGLMM(m1)
+# the same table as a data frame (df, logLik, AIC, AICc, delta AICc, weight), saved for the SI
+model_selection <- data.frame(
+  model  = names(models),
+  df     = sapply(models, function(m) attr(logLik(m), "df")),
+  logLik = sapply(models, function(m) as.numeric(logLik(m))),
+  AIC    = sapply(models, AIC),
+  AICc   = sapply(models, MuMIn::AICc),
+  row.names = NULL
+) %>%
+  mutate(dAICc  = AICc - min(AICc),
+         weight = exp(-0.5 * dAICc) / sum(exp(-0.5 * dAICc))) %>%
+  arrange(dAICc)
+model_selection
+write.csv(model_selection, file.path(out_dir, "table_postmed_model_selection_NOV4.csv"), row.names = FALSE)
+
+## ---  Likelihood ratio tests: ---
+anova(m1, m2_hill)  # m2 = m1 + hill_diversity_z
+anova(m1, m3)  # m3 = m1 + biomass-age interaction
+anova(m1, m4)  # m4 = m1 + sex by age interatcion
+anova(m1, m5)  # m5 = m1 + EVI
+
+## drop 1 term from m1 at a time
+m1_no_sex <- update(m1, . ~ . - sex)
+m1_no_biomass <- update(m1, . ~ . - LogBM_z)
+m1_no_age <- update(m1, . ~ . - relative_age_z)
+
+anova(m1_no_sex, m1)      # LRT for sex
+anova(m1_no_biomass, m1)  # LRT for LogBM_z
+anova(m1_no_age, m1)      # LRT for relative_age_z
+
+## --- DHARMA model diagnostics: m1 ---
+set.seed(123)
+
+## Response range 
+range(model.frame(m1)$Salmon.med)
+
+## simulate scaled residuals: 
+sim_m1 <- simulateResiduals(fittedModel = m1, n = 1000)
+
+## QQ plot (left) and residuals vs predicted (right)
+plot(sim_m1)
+
+## formal test
+testUniformity(sim_m1)
+testDispersion(sim_m1)
+testOutliers(sim_m1)
+check_collinearity(m1)
+
+## residuals against each predictor
+mf <- model.frame(m1)               # keeps rows aligned with the model
+plotResiduals(sim_m1, mf$LogBM_z)
+plotResiduals(sim_m1, mf$relative_age_z)
+plotResiduals(sim_m1, mf$sex)
+# random
+plotResiduals(sim_m1, mf$WSHDFID)
+plotResiduals(sim_m1, mf$year)
+
+#save for SI:
+png(file.path(out_dir, "FigS_DHARMa_m1.png"), width = 2400, height = 1200, res = 300)
+plot(sim_m1)
+dev.off()
+
+png(file.path(out_dir, "FigS_DHARMa_predictors.png"), width = 3000, height = 1000, res = 300)
+par(mfrow = c(1, 3))
+plotResiduals(sim_m1, mf$LogBM_z)
+plotResiduals(sim_m1, mf$relative_age_z)
+plotResiduals(sim_m1, mf$sex)
+dev.off()
+## 
+lapply(list(m1 = m1, m2_hill = m2_hill, m5 = m5), check_collinearity)
+
+## --- m1 results: ---
 summary(m1)
-confint(m1)
 
-# ----------------------
-# Plots
+ci_m1 <- confint(m1)
+ci_m1
+write.csv(data.frame(term = rownames(ci_m1), ci_m1, row.names = NULL),
+          file.path(out_dir, "tableS3_m1_coefficients.csv"), row.names = FALSE)
 
-# coefficient plot from m1: 
-library(dotwhisker)
+r2_nakagawa(m1)
 
-summary(m1)
+# Partial (drop-one) marginal R2
+marg <- function(m) r2_nakagawa(m)$R2_marginal
+data.frame(
+  term       = c("sex", "LogBM_z", "relative_age_z"),
+  R2_without = c(marg(m1_no_sex), marg(m1_no_biomass), marg(m1_no_age)),
+  R2_full    = marg(m1)
+) %>% mutate(partial_R2 = R2_full - R2_without)
 
-coef_data_m1 <- data.frame(
-  term = c(
-    "Sex (male)",
-    "Log salmon biomass",
-    "Relative age"
-  ),
-  estimate = c(
-    0.51604,   # sexmale
-    0.05827,   # LogBM_z
-    0.29132    # relative_age_z
-  ),
-  std.error = c(
-    0.09463,   # sexmale
-    0.04584,   # LogBM_z
-    0.04835    # relative_age_z
-  ),
-  model = "m1"
-)
-
-#  Create the plot 
-coef_plot <- dwplot(
-  coef_data_m1,
-  dot_args     = list(size = 3),
-  whisker_args = list(linewidth = 0.8)
-) +
-  # Reference line at zero — effects crossing this are non-significant
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.6) +
-  # Colour significant vs non-significant predictors differently
-  scale_colour_manual(values = c("m1" = "black")) +
-  scale_x_continuous(limits = c(-0.1, 0.7), breaks = seq(-0.1, 0.7, 0.1)) +
-  labs(
-    x = "Standardised coefficient estimate (± 95% CI)",
-    y = ""
-  ) +
-  theme_classic(base_size = 13) +
-  theme(
-    legend.position   = "none",
-    axis.text.y       = element_text(size = 13),
-    axis.text.x       = element_text(size = 13),
-    axis.title.x      = element_text(size = 13),
-    panel.grid.major  = element_blank(),
-    panel.grid.minor  = element_blank()
-  )
-
-coef_plot
 
 ## --- Generate predictions from m1 on the response scale --- ##
-df$predicted <- predict(m1, type = "response")
+## used as model check only
+pred_check <- df %>% mutate(predicted = predict(m1, type = "response"))
 
 # Median predicted proportion of salmon in diet by sex
-df %>%
+pred_check %>%
   summarise(
     median_consumption = median(predicted, na.rm = TRUE),
     min_consump = min(predicted, na.rm = TRUE),
     max_consump = max(predicted, na.rm = TRUE)
   )
-#^ across the whole dataset, this is the range of predicted salmon consumption
-# "What is the predicted consumption for an average bear?"
+
+# Predicted consumption for an average bear?"
 ggpredict(m1, terms = "sex")
 
 
-#  mean across all observations
-#    "What is the average predicted consumption across all bears?"
-df %>%
+# the average predicted consumption across all bears?"
+pred_check %>%
   group_by(sex) %>%
   summarise(mean_predicted = mean(predicted, na.rm = TRUE))
-
-## -----------------------------------------------------------------------------
-## --- CREATE FIG 2 --- ##
-
-library(ggeffects)
-library(ggplot2)
-library(gridExtra)
-
-# ---- Recreate scaling constants ---- #
-bm_mean  <- mean(df$LogBM, na.rm = TRUE)
-bm_sd    <- sd(df$LogBM,   na.rm = TRUE)
-age_mean <- mean(df$relative_age, na.rm = TRUE)
-age_sd   <- sd(df$relative_age,   na.rm = TRUE)
-
-
-# ---- Get marginal predictions for both sexes ---- #
-ggpred_biomass <- ggpredict(m1, terms = c("LogBM_z [all]", "sex"))
-ggpred_age     <- ggpredict(m1, terms = c("relative_age_z [all]", "sex"))
-ggpred_sex     <- ggpredict(m1, terms = "sex")
-
-# ---- Back-transform x values ---- #
-ggpred_biomass$x_real <- ggpred_biomass$x * bm_sd  + bm_mean
-ggpred_age$x_real     <- ggpred_age$x     * age_sd + age_mean
-
-# ---- Rename group column for clean legend labels ---- #
-ggpred_biomass$group <- factor(ggpred_biomass$group, 
-                               levels = c("female", "male"), 
-                               labels = c("Female", "Male"))
-ggpred_age$group     <- factor(ggpred_age$group,     
-                               levels = c("female", "male"), 
-                               labels = c("Female", "Male"))
-ggpred_sex$x         <- factor(ggpred_sex$x,         
-                               levels = c("female", "male"), 
-                               labels = c("Female", "Male"))
-
-# ---- Shared colour scale ---- #
-sex_colours <- c("Female" = "#FF83FA", "Male" = "#1C86EE")
-
-# ---- Plot 1: Log Salmon Biomass ---- #
-p1 <- ggplot(ggpred_biomass, aes(x = x_real, y = predicted, 
-                                 colour = group, fill = group)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
-  geom_line(linewidth = 1) +
-  scale_colour_manual(values = sex_colours) +
-  scale_fill_manual(values   = sex_colours) +
-  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.4, 1.0, 0.2)) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
-  labs(
-    title  = "(a)",
-    x      = "Log biomass density",
-    y      = "Proportion of salmon in annual diet",
-    colour = "Sex", fill = "Sex"
-  ) +
-  theme_classic(base_size = 14) +
-  theme(
-    axis.text    = element_text(size = 14),
-    axis.title   = element_text(size = 14),
-    plot.title   = element_text(size = 16),
-    legend.position = "none"  
-  )
-
-# ---- Plot 2: Sex ---- #
-p2 <- ggplot(ggpred_sex, aes(x = x, y = predicted, colour = x)) +
-  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size = 1) +
-  scale_colour_manual(values = sex_colours) +
-  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.4, 1.0, 0.2)) +
-  labs(
-    title  = "(b)",
-    x      = "Sex",
-    y      = NULL,
-    colour = "Sex"
-  ) +
-  theme_classic(base_size = 14) +
-  theme(
-    axis.text    = element_text(size = 14),
-    axis.title   = element_text(size = 14),
-    plot.title   = element_text(size = 16),
-    legend.position = "none"
-  )
-
-# ---- Plot 3: Relative Age ---- #
-p3 <- ggplot(ggpred_age, aes(x = x_real, y = predicted, 
-                             colour = group, fill = group)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
-  geom_line(linewidth = 1) +
-  scale_colour_manual(values = sex_colours) +
-  scale_fill_manual(values   = sex_colours) +
-  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.4, 1.0, 0.2)) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
-  labs(
-    title  = "(c)",
-    x      = "Relative age",
-    y      = NULL,
-    colour = "Sex", fill = "Sex"
-  ) +
-  theme_classic(base_size = 14) +
-  theme(
-    axis.text    = element_text(size = 14),
-    axis.title   = element_text(size = 14),
-    plot.title   = element_text(size = 16),
-    legend.position = "right"  # show legend on last panel only
-  )
-
-library(patchwork)
-library(egg)
-
-final_plot <- ggarrange(p1, p2, p3,
-                        nrow   = 1)
-
-## -----------------------------------------------------------------------------
-
-# Get range from marginal predictions
-ggpred_range <- ggpredict(m1, 
-                          terms = c("LogBM_z [all]", 
-                                    "relative_age_z [all]", 
-                                    "sex"),
-                          bias_correction = TRUE)
-
-range(ggpred_range$predicted)
-
-# Get marginal range holding biomass at mean
-ggpred_age <- ggpredict(m1, 
-                        terms = c("relative_age_z [all]", "sex"),
-                        bias_correction = TRUE)
-range(ggpred_age$predicted)
-median(ggpred_age$predicted)
-
-## --------------------------------------------------
-## --- Calculating the absolute percentage points change: FOR RESULTS **---
-library(plotrix)
-
-dff=subset(df,df$sex=="female")
-dfm=subset(df,df$sex=="male")
-
-par(mfrow=c(1,2))
-minage_z=min(df$relative_age_z)  #minimum age of the bears sampled
-
-# Assign individual coefficients
-# Pull intercept and coefficients
-coefs <- fixef(m1)$cond  
-intercept <- fixef(m1)$cond["(Intercept)"]
-age_coef <- summary(m1)$coefficients$cond["relative_age_z", "Estimate"] 
-sex_coef <- summary(m1)$coefficients$cond["sexmale", "Estimate"]  #fixed_effects["sexmale"] 
-
-
-# Back-transform relative_age range to real units
-age_min <- min(df$relative_age)   
-age_max_f <- max(dff$relative_age) 
-age_max_m <- max(dfm$relative_age) 
-
-age_min_z  <- (age_min    - mean(df$relative_age)) / sd(df$relative_age)
-age_maxf_z <- (age_max_f  - mean(df$relative_age)) / sd(df$relative_age)
-age_maxm_z <- (age_max_m  - mean(df$relative_age)) / sd(df$relative_age)
-
-# Predicted proportions on response scale
-female_start <- plogis(intercept + age_coef * age_min_z)
-female_end   <- plogis(intercept + age_coef * age_maxf_z)
-
-male_start   <- plogis(intercept + age_coef * age_min_z   + sex_coef)
-male_end     <- plogis(intercept + age_coef * age_maxm_z  + sex_coef)
-
-# Print results
-cat("=== ABSOLUTE PERCENTAGE POINT CHANGE ===\n\n")
-
-cat("Females:\n")
-cat("  Start (relative age", age_min, "):", round(female_start * 100, 1), "%\n")
-cat("  End   (relative age", age_max_f, "):", round(female_end   * 100, 1), "%\n")
-cat("  Change:", round((female_end - female_start) * 100, 1), "percentage points\n\n")
-
-cat("Males:\n")
-cat("  Start (relative age", age_min, "):", round(male_start * 100, 1), "%\n")
-cat("  End   (relative age", age_max_m, "):", round(male_end   * 100, 1), "%\n")
-cat("  Change:", round((male_end - male_start) * 100, 1), "percentage points\n")
-
-## --------- AT WHAT RELATIVE AGE DOES CONSUMPTION INCREASE BY 15 %  --------
-## absolute percentage change ##
-# Create a fine sequence of ages
-age_seq <- seq(age_min, max(df$relative_age), by = 0.1)
-age_seq_z <- (age_seq - mean(df$relative_age)) / sd(df$relative_age)
-
-# Predicted proportions across the full age range
-pred_female <- plogis(intercept + age_coef * age_seq_z)
-pred_male   <- plogis(intercept + age_coef * age_seq_z + sex_coef)
-
-# Find the age where the increase first hits 15 percentage points
-target_pp <- 0.15
-
-age_15pp_female <- age_seq[which(pred_female >= (female_start + target_pp))[1]]
-age_15pp_male   <- age_seq[which(pred_male   >= (male_start   + target_pp))[1]]
-
-cat("=== AGE AT WHICH CONSUMPTION INCREASES BY 15 PERCENTAGE POINTS ===\n\n")
-cat("Females:\n")
-cat("  Start:", round(female_start * 100, 1), "%\n")
-cat("  Reaches", round((female_start + target_pp) * 100, 1), "% at relative age:", age_15pp_female, "\n\n")
-cat("Males:\n")
-cat("  Start:", round(male_start * 100, 1), "%\n")
-cat("  Reaches", round((male_start + target_pp) * 100, 1), "% at relative age:", age_15pp_male, "\n")
 
 #-------------------------------------------------------------------------------
 # Check how much watershed random effect matters
@@ -373,4 +249,10 @@ anova(m1_no_watershed, m1)
 # Check if coefficients change meaningfully
 fixef(m1)$cond
 fixef(m1_no_watershed)$cond
+
+## 
+sum(df$Salmon.med == 0)
+sum(df$Salmon.med == 1)
+range(df$Salmon.med)
+
 
