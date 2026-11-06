@@ -54,7 +54,6 @@ data/
     ├── combinedStreams2019.zip
     ├── combinedStreamsBMTotal_NoZeros2019.zip
     ├── covariotes_no_loactions_6-11-04.csv
-    ├── EVI.zip
     ├── Focal Watersheds in Study Area.zip
     ├── gbs_in_wshds_no_loaactions_6-11-04.csv
     ├── individual_year_sex_lookup.csv
