@@ -1,15 +1,19 @@
 #####################
 #
-# calculates Shannon diversity of salmon species for merged watersheds.
+#  calculates Shannon diversity for salmon species at the merged watershed scale
+#  we use the 5 Pacific salmon species (Oncorhynchus spp)
+#  only merged watershed is used for the following analyses
 # 
 #####################
 
 library(readr)
 library(here)
+library(tidyr)
 library(dplyr)
 library(sf)
+library(vegan)
 
-#read in salmon data that is separated by salmon species. 
+#read in salmon data that is separated by salmon species 
 salm_spp <- st_read(here("data", "processed",  "combinedStreams2019", "combinedStreams2019.shp"))
 
 #select only the columns we want
@@ -111,7 +115,7 @@ focal_spp_lengths$AREA_KM2 <- focal_spp_lengths$AREA_SQM/1000000
 merg_spp_lengths <- merg_spp[, c(2:18, 20:22, 26)]
 
 #-----------------------------------------------------------------------------------------------
-## Calculate diversity in focal watersheds
+## Calculate diversity in watersheds
 ## Diversity is calculated at the focal and merged watershed scale for completeness but only merged
 ## is used in final analysis. focal have been commmented out here
 
@@ -158,8 +162,6 @@ bm_MWS <- bm_sppMWS %>%
 bm_sppMWS <- merge(bm_sppMWS, bm_MWS, by = c("WSHDFID", "year"))
 bm_sppMWS$proportion <- bm_sppMWS$YearlyBMinMWS / bm_sppMWS$totalYrlyBMinMWS
 
-library(vegan)
-
 #bm_diversityFWS <- bm_sppFWS %>%
 #  group_by(WTRSHD_FID, year) %>%
 #  mutate(Shannon = diversity(x = YearlyBMinFWS, index = 'shannon'))
@@ -174,10 +176,11 @@ bm_diversityMWS <- bm_diversityMWS[,c(1,2,7)]
 #bm_diversityFWS <- unique(bm_diversityFWS)
 bm_diversityMWS <- unique(bm_diversityMWS)
 
-## now have a shannon diversity index for each focal watershed and year
-#write.csv(bm_diversityFWS, "C:/Users/monic/Documents/Documents/PhD/focal_spp_diversity_per_year.csv")
+## Hill number (q = 1): the exponential of Shannon entropy = the effective number of salmon species.
+## Shannon diversity is non-linear, so Hill's number is the diversity metric used in modelling.
+bm_diversityMWS$Hill <- exp(bm_diversityMWS$Shannon)
+stopifnot(!anyDuplicated(bm_diversityMWS[, c("WSHDFID", "year")]))
 
 #have a shannon diversity index for each larger watershed and year
-write.csv(bm_diversityMWS, here("data", "processed", "merg_spp_diversity_per_year.csv"))
-
+write.csv(bm_diversityMWS, here("data", "processed", "merg_spp_diversity_per_year_with_Hill.csv"))
           
